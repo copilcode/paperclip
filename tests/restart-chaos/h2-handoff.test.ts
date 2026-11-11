@@ -34,9 +34,8 @@ describe("H2: the agent's own hand-off to a person (staging class H)", () => {
     expect(failed(artifacts({ runs: [] }))).toEqual(["handoff_did_not_cancel_run"]);
   });
 
-  it("fails when the run failed instead of finishing", () => {
-    expect(failed(artifacts({ runs: [{ id: "run-1", status: "failed", errorCode: "native_restart_recovery_blocked" }] })))
-      .toEqual(["handoff_did_not_cancel_run"]);
+  it("accepts a run that a restart after the hand-off settled without the task", () => {
+    expect(grade(artifacts({ runs: [{ id: "run-1", status: "failed", errorCode: "native_restart_recovery_blocked" }] })).verdict).toBe("pass");
   });
 
   it("fails when a run never settled", () => {

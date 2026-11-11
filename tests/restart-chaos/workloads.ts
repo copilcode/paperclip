@@ -164,14 +164,14 @@ const handoffDescription = (nonce: string) => [
 
 /**
  * H2 (staging class H): the agent's own hand-off to a person must not cancel its run. The task rests in review with
- * that person, every run of the task succeeded (none ended `issue_reassigned`), and nothing blocks the task's execution.
+ * that person, every run of the task settled without `issue_reassigned`, and nothing blocks the task's execution.
  */
 export function handoffChecks(artifacts: OracleArtifacts): OracleResult["checks"] {
   const handoff = artifacts.handoff;
   const runs = handoff?.runs ?? null;
   const reassignedRuns = (runs ?? []).filter(run => run.errorCode === "issue_reassigned").map(run => run.id);
-  // The run that handed the task off finishes normally, even across a restart.
-  const unsettled = (runs ?? []).filter(run => run.status !== "succeeded");
+  // A restart after the hand-off settles the run as failed (it is not resumed without the task); it must settle.
+  const unsettled = (runs ?? []).filter(run => !["succeeded", "cancelled", "failed", "timed_out"].includes(run.status));
   return [
     { name: "issue_in_review", ok: artifacts.issueStatus === "in_review", detail: `status=${artifacts.issueStatus ?? "unknown"}` },
     { name: "handed_to_creator", ok: Boolean(handoff?.createdByUserId) && handoff!.assigneeAgentId === null

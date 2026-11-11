@@ -1264,8 +1264,9 @@ export async function claimNativeRestartRecoveries(input: {
         const deferred = await deferRemoteRetry("issue_execution_lock_changed");
         if (deferred) return deferred;
       }
-      // The run handed its own task to a person: it resumes only to finish its
-      // turn. Its tools, fences and finalizer act for that hand-off alone.
+      // The run handed its own task to a person. It is not resumed: the
+      // ownership gate below settles it (task_ownership_or_status_changed)
+      // without touching the person's task, instead of leaving it running.
       const handedOff = row.issueExecutionRunId === null && nativeRunHandedOffTask(row.run.resultJson, issue);
       if (row.issueExecutionRunId !== row.run.id && !(stopCleanup && row.issueExecutionRunId === null) && !releasedRemoteRetry
         && !admission.exhausted && !handedOff) {
@@ -1682,7 +1683,7 @@ export async function claimNativeRestartRecoveries(input: {
         return { kind: "blocked", runId: row.run.id, reason: "native_stop_requires_existing_remote_session" } as const;
       }
       const ownershipChanged =
-        (row.issueAssigneeAgentId !== row.run.agentId && !handedOff) ||
+        row.issueAssigneeAgentId !== row.run.agentId ||
         ["done", "cancelled"].includes(row.issueStatus);
       if (needsResumptionAdmission && (!durableAuthority || ownershipChanged || classification.claimKind !== "reattach_remote_runner")) {
         if (!admission.exhausted) {
