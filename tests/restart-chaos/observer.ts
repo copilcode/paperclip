@@ -940,13 +940,13 @@ export class TaskObserver {
 
   /** H2: the owner at rest and every run's terminal state (an `issue_reassigned` cancel is the staging failure). */
   private async collectHandoff(issueId: string, issue: Json | null | undefined): Promise<NonNullable<OracleArtifacts["handoff"]>> {
-    const runs = await this.api.get<Json[]>(`/api/issues/${issueId}/runs`).catch(() => []);
+    const runs = await this.api.get<Json[]>(`/api/issues/${issueId}/runs`).catch(() => null);
     const text = (value: unknown) => typeof value === "string" ? value : null;
     return {
       assigneeAgentId: text(issue?.assigneeAgentId), assigneeUserId: text(issue?.assigneeUserId),
       createdByUserId: text(issue?.createdByUserId),
       executionBlocker: Boolean(issue?.executionBlocker), activeRecoveryAction: Boolean(issue?.activeRecoveryAction),
-      runs: (runs ?? []).map(toRunSample).map(run => ({ id: run.id, status: run.status, errorCode: run.errorCode })),
+      runs: Array.isArray(runs) ? runs.map(toRunSample).map(run => ({ id: run.id, status: run.status, errorCode: run.errorCode })) : null,
     };
   }
 

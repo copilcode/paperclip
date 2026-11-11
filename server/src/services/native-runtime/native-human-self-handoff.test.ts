@@ -9,6 +9,8 @@ import { getExecutionBlocker } from "../execution-blocker.js";
 import { issueService } from "../issues.js";
 import { NativeRunCoordinatorStore } from "./native-run-coordinator-store.js";
 import { finalizeNativeRun } from "./native-run-finalizer.js";
+import { assertCurrentWakeCommentsRead } from "./current-wake-comments.js";
+import { recordNativeHumanSelfHandoff } from "./native-human-self-handoff.js";
 import { NATIVE_STATUS_ARBITER_POLICY_VERSION, supersedeHandedOffDecision, type NativeStatusDecision } from "./status-arbiter.js";
 
 describe("handed-off task decision policy", () => {
@@ -27,10 +29,23 @@ describe("handed-off task decision policy", () => {
   ])("leaves the decision alone when %s", (_label, issue) => {
     expect(supersedeHandedOffDecision(incomplete, issue)).toBe(incomplete);
   });
-  it("keeps a governed request's interaction", () => {
+  it("keeps a governed request's interaction, without waking the outgoing agent", () => {
+    const interaction = { kind: "create_interaction", gate: { kind: "approval", id: "a" } };
     const gated = { ...incomplete, statusAction: "in_review", toStatus: "in_review", reasonCode: "governed_gate_pending",
-      effects: [{ kind: "create_interaction", gate: { kind: "approval", id: "a" } }] } as unknown as NativeStatusDecision;
-    expect(supersedeHandedOffDecision(gated, person)).toBe(gated);
+      effects: [interaction, { kind: "notify_owner", agentId: "agent-a", reason: "governed_gate_pending" }] } as unknown as NativeStatusDecision;
+    expect(supersedeHandedOffDecision(gated, person)).toEqual({ ...gated, effects: [interaction] });
+  });
+  it("drops a failed turn's retry of the outgoing agent from a preserving decision", () => {
+    const failedTurn: NativeStatusDecision = { ...incomplete, statusAction: "preserve", toStatus: "in_review",
+      reasonCode: "run_failed_partial_evidence_preserved",
+      effects: [{ kind: "release_checkout" }, { kind: "schedule_retry", cause: "x", summary: "Retry", agentId: "agent-a" }] };
+    expect(supersedeHandedOffDecision(failedTurn, person)).toEqual({ ...failedTurn, effects: [{ kind: "release_checkout" }] });
+  });
+  it("keeps the workspace repair of a failed finalization, so saved work is not lost", () => {
+    const finalizationFailed: NativeStatusDecision = { ...incomplete, statusAction: "preserve", toStatus: "in_review",
+      reasonCode: "finalization_failed_claim_preserved", effects: [{ kind: "record_finalization_error",
+        cause: "workspace_finalization_failed", nextAction: "Repair", agentId: "agent-a" }] };
+    expect(supersedeHandedOffDecision(finalizationFailed, person)).toBe(finalizationFailed);
   });
 });
 
@@ -78,10 +93,33 @@ describe.skipIf(!support.supported)("native run hands its own task to a person",
   type Fixture = Awaited<ReturnType<typeof runningNativeTask>>;
 
   /** The REST PATCH the agent sends through its run token (route exemption applied). */
-  async function handOffToPerson(f: Fixture) {
+  /** What the route does for the run's own hand-off: record it on the run, then save the assignment. */
+  async function handOffToPerson(f: Fixture, options: { record?: boolean } = {}) {
+    if (options.record !== false) {
+      expect(await recordNativeHumanSelfHandoff(db, { companyId: f.companyId, runId: f.runId, agentId: f.agentId,
+        issueId: f.issueId, assigneeUserId: f.userId })).toBe(true);
+    }
     return issueService(db).update(f.issueId, { assigneeAgentId: null, assigneeUserId: f.userId, status: "in_review",
       actorAgentId: f.agentId, actorRunId: f.runId } as never);
   }
+
+  it("lets the run's terminal fence accept the task it handed to a person, and only that hand-off", async () => {
+    const binding = (f: Fixture) => ({ companyId: f.companyId, issueId: f.issueId, runId: f.runId, agentId: f.agentId });
+    const recorded = await runningNativeTask();
+    await handOffToPerson(recorded);
+    await expect(assertCurrentWakeCommentsRead(db, binding(recorded), null)).resolves.toBeUndefined();
+
+    // Without the run's record (for example a board reassignment), the fence still refuses.
+    const unrecorded = await runningNativeTask();
+    await handOffToPerson(unrecorded, { record: false });
+    await expect(assertCurrentWakeCommentsRead(db, binding(unrecorded), null)).rejects.toThrow("native_current_wake_comments_binding_changed");
+
+    // A later reassignment to someone else is not the hand-off this run made.
+    const other = randomUUID();
+    await db.insert(authUsers).values({ id: other, name: "Other", email: `${other}@example.test`, createdAt: new Date(), updatedAt: new Date() });
+    await db.update(issues).set({ assigneeUserId: other }).where(eq(issues.id, recorded.issueId));
+    await expect(assertCurrentWakeCommentsRead(db, binding(recorded), null)).rejects.toThrow("native_current_wake_comments_binding_changed");
+  });
 
   const results = {
     done: { schema: "paperclip.run_result.v1", reportedWorkDisposition: "done", summary: "Plan drafted and handed to the reviewer.",
@@ -112,6 +150,26 @@ describe.skipIf(!support.supported)("native run hands its own task to a person",
     expect(decision).toMatchObject({ toStatus: "in_review", reasonCode: "completion_owner_superseded",
       decisionJson: expect.objectContaining({ statusAction: "preserve", effects: [] }) });
 
+    expect((await db.select().from(issues).where(eq(issues.id, f.issueId)))[0]).toMatchObject({
+      status: "in_review", assigneeAgentId: null, assigneeUserId: f.userId,
+    });
+    expect(await getExecutionBlocker(db, f.companyId, f.issueId)).toBeNull();
+    expect(await db.select().from(issueRecoveryActions).where(eq(issueRecoveryActions.sourceIssueId, f.issueId))).toEqual([]);
+  });
+
+  it("does not retry the outgoing agent after a failed turn", async () => {
+    const f = await runningNativeTask();
+    await handOffToPerson(f);
+    const result = JSON.parse(JSON.stringify(results.needs_review));
+    await f.port.completeRun({ result, terminal: { schema: "paperclip.prp.terminal.v1", runTerminalState: "failed",
+      turnTerminalState: "failed", reportedWorkDisposition: "needs_review" }, turnId: "handoff-failed" });
+    await finalizeNativeRun({ db, runId: f.runId, workspaceFinalizeStatus: "succeeded", projectRunStatus: false });
+    const [coordinator] = await db.select().from(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, f.runId));
+    const [decision] = await db.select().from(statusDecisions).where(eq(statusDecisions.id, coordinator!.decisionId!));
+    expect(coordinator!.phase).toBe("committed");
+    expect((decision!.decisionJson as { effects: Array<{ kind: string }> }).effects
+      .filter(effect => ["schedule_retry", "enqueue_continuation", "record_recovery", "bind_blocker", "notify_owner"].includes(effect.kind)))
+      .toEqual([]);
     expect((await db.select().from(issues).where(eq(issues.id, f.issueId)))[0]).toMatchObject({
       status: "in_review", assigneeAgentId: null, assigneeUserId: f.userId,
     });

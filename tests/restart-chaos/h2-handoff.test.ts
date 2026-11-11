@@ -29,6 +29,11 @@ describe("H2: the agent's own hand-off to a person (staging class H)", () => {
       .toEqual(["issue_in_review", "handed_to_creator"]);
   });
 
+  it("fails when the run history could not be read or is empty", () => {
+    expect(failed(artifacts({ runs: null }))).toEqual(["handoff_did_not_cancel_run"]);
+    expect(failed(artifacts({ runs: [] }))).toEqual(["handoff_did_not_cancel_run"]);
+  });
+
   it("fails when a run never settled", () => {
     expect(failed(artifacts({ runs: [{ id: "run-1", status: "running", errorCode: null }] }))).toEqual(["handoff_did_not_cancel_run"]);
   });

@@ -168,16 +168,17 @@ const handoffDescription = (nonce: string) => [
  */
 export function handoffChecks(artifacts: OracleArtifacts): OracleResult["checks"] {
   const handoff = artifacts.handoff;
-  const reassignedRuns = (handoff?.runs ?? []).filter(run => run.errorCode === "issue_reassigned").map(run => run.id);
-  const unsettled = (handoff?.runs ?? []).filter(run => !["succeeded", "cancelled", "failed", "timed_out"].includes(run.status));
+  const runs = handoff?.runs ?? null;
+  const reassignedRuns = (runs ?? []).filter(run => run.errorCode === "issue_reassigned").map(run => run.id);
+  const unsettled = (runs ?? []).filter(run => !["succeeded", "cancelled", "failed", "timed_out"].includes(run.status));
   return [
     { name: "issue_in_review", ok: artifacts.issueStatus === "in_review", detail: `status=${artifacts.issueStatus ?? "unknown"}` },
     { name: "handed_to_creator", ok: Boolean(handoff?.createdByUserId) && handoff!.assigneeAgentId === null
         && handoff!.assigneeUserId === handoff!.createdByUserId,
       detail: `agent=${handoff?.assigneeAgentId ?? "none"} user=${handoff?.assigneeUserId ?? "none"} creator=${handoff?.createdByUserId ?? "none"}` },
-    { name: "handoff_did_not_cancel_run", ok: Boolean(handoff) && reassignedRuns.length === 0 && unsettled.length === 0,
-      detail: reassignedRuns.length ? `issue_reassigned=${reassignedRuns.join(",")}`
-        : `runs=${(handoff?.runs ?? []).map(run => `${run.id}:${run.status}`).join(",") || "none"}` },
+    { name: "handoff_did_not_cancel_run", ok: Boolean(runs?.length) && reassignedRuns.length === 0 && unsettled.length === 0,
+      detail: runs === null ? "run history unavailable" : reassignedRuns.length ? `issue_reassigned=${reassignedRuns.join(",")}`
+        : `runs=${runs.map(run => `${run.id}:${run.status}`).join(",") || "none"}` },
     { name: "no_execution_blocker", ok: Boolean(handoff) && !handoff!.executionBlocker && !handoff!.activeRecoveryAction,
       detail: `blocker=${handoff?.executionBlocker ?? "unknown"} recovery=${handoff?.activeRecoveryAction ?? "unknown"}` },
   ];

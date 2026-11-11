@@ -174,6 +174,7 @@ const mockRequestTaskRetry = vi.hoisted(() => vi.fn());
 const mockOnboardingFirstTaskDependenciesAllowed = vi.hoisted(() => vi.fn(async () => undefined));
 const mockGetExperimental = vi.hoisted(() => vi.fn());
 const mockResumeWorkspaceFinalization = vi.hoisted(() => vi.fn());
+const mockRecordNativeHumanSelfHandoff = vi.hoisted(() => vi.fn(async () => true));
 
 function registerRouteMocks() {
   vi.doMock("../services/instance-settings.js", async () => {
@@ -194,6 +195,7 @@ function registerRouteMocks() {
   vi.doMock("../services/native-runtime/native-workspace-owner-recovery.js", () => ({ resumeNativeWorkspaceAfterOwnerStop: mockResumeWorkspaceFinalization }));
   vi.doMock("../services/native-runtime/native-workspace-export-retry.js", () => ({ retryNativeWorkspaceExport: mockRetryWorkspaceExport }));
   vi.doMock("../services/workspace-recovery.js", () => ({ requestWorkspaceRecovery: mockRequestWorkspaceRecovery }));
+  vi.doMock("../services/native-runtime/native-human-self-handoff.js", () => ({ recordNativeHumanSelfHandoff: mockRecordNativeHumanSelfHandoff }));
   vi.doMock("@paperclipai/shared/telemetry", () => ({
     trackAgentTaskCompleted: vi.fn(),
     trackErrorHandlerCrash: vi.fn(),
@@ -2949,6 +2951,14 @@ describe("agent issue mutation checkout ownership", () => {
       expect(res.status, JSON.stringify(res.body)).toBe(200);
       expect(res.body).toMatchObject(handoff);
       expect(mockHeartbeatService.cancelRun).not.toHaveBeenCalled();
+      if (runtimeMode === "native") {
+        expect(mockRecordNativeHumanSelfHandoff).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+          runId: ownerRunId, agentId: ownerAgentId, issueId, assigneeUserId: "board-user" }));
+        expect(mockRecordNativeHumanSelfHandoff.mock.invocationCallOrder[0])
+          .toBeLessThan(mockIssueService.update.mock.invocationCallOrder[0]!);
+      } else {
+        expect(mockRecordNativeHumanSelfHandoff).not.toHaveBeenCalled();
+      }
       expect(mockIssueService.update.mock.calls[0]?.[1]).toMatchObject({
         ...handoff,
         actorRunId: ownerRunId,

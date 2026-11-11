@@ -341,7 +341,8 @@ export interface HandoffArtifacts {
   createdByUserId: string | null;
   executionBlocker: boolean;
   activeRecoveryAction: boolean;
-  runs: Array<{ id: string; status: string; errorCode: string | null }>;
+  /** Null when the run history could not be read: the run checks then fail. */
+  runs: Array<{ id: string; status: string; errorCode: string | null }> | null;
 }
 
 /** What the board did for a governance task (G1, H1), and what the observer saw. */
