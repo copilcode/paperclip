@@ -1682,7 +1682,7 @@ export async function claimNativeRestartRecoveries(input: {
         return { kind: "blocked", runId: row.run.id, reason: "native_stop_requires_existing_remote_session" } as const;
       }
       const ownershipChanged =
-        row.issueAssigneeAgentId !== row.run.agentId ||
+        (row.issueAssigneeAgentId !== row.run.agentId && !handedOff) ||
         ["done", "cancelled"].includes(row.issueStatus);
       if (needsResumptionAdmission && (!durableAuthority || ownershipChanged || classification.claimKind !== "reattach_remote_runner")) {
         if (!admission.exhausted) {
